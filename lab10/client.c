@@ -9,16 +9,15 @@
 #define BUF_SIZE 1024
 #define ADDR "127.0.0.1"
 
-#define handle_error(msg)                                                      \
-  do {                                                                         \
-    perror(msg);                                                               \
-    exit(EXIT_FAILURE);                                                        \
+#define handle_error(msg)                                                                          \
+  do {                                                                                             \
+    perror(msg);                                                                                   \
+    exit(EXIT_FAILURE);                                                                            \
   } while (0)
 
 #define NUM_MSG 5
 
-static const char *messages[NUM_MSG] = {"Hello", "Apple", "Car", "Green",
-                                        "Dog"};
+static const char *messages[NUM_MSG] = {"Hello", "Apple", "Car", "Green", "Dog"};
 
 int main() {
   int sfd = socket(AF_INET, SOCK_STREAM, 0);

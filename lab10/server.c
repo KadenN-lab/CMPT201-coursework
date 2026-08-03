@@ -1,3 +1,40 @@
+/*
+Questions to answer at top of server.c:
+(You should not need to change client.c)
+Understanding the Client:
+1. How is the client sending data to the server? What protocol?
+The client uses TCP over IPv4. It creates a socket with socket(AF_INET, SOCK_STREAM, 0), connects to
+127.0.0.1:8001, and sends data using write() on that connected socket descriptor.
+2. What data is the client sending to the server?
+The client sends 5 fixed string messages, which are: "Hello", "Apple", "Car","Green", and "Dog".
+Each message is copied into a BUF_SIZE (1024) byte buffer with strncpy() and the full 1024 bytes are
+written to the socket each time. Understanding the Server:
+1. Explain the argument that the `run_acceptor` thread is passed as an argument.
+It receives a pointer to acceptor_args, which contains: atomic_bool run: a flag the main thread
+flips to false to signal the acceptor loop to stop accepting new connections. struct list_handle
+*list_handle: a pointer to the shared linked list where all received messages are accumulated.
+pthread_mutex_t *list_lock: a pointer to the mutex that protects the shared list from concurrent
+writes by multiple client threads.
+2. How are received messages stored?
+In a singly-linked list whose nodes are heap-allocated. The list has a head node (stack-allocated in
+main, never freed). Each received message gets its own list_node with a malloc'd BUF_SIZE data
+buffer holding the raw bytes from the socket. The list_handle struct tracks the tail pointer (last)
+so appending is O(1), and a volatile count so main() can poll how many messages have arrived.
+3. What does `main()` do with the received messages?
+After the acceptor thread finishes, main() calls collect_all(), which walks the linked list from
+head.next onward, prints each message's string with printf("Collected: %s\n", ...), frees each
+node's data buffer and the node itself, and returns the total count. main() then checks that the
+collected count equals list_handle.count and prints either "All messages were collected!" or an
+error.
+4. How are threads used in this sample code?
+Two layers of threads are used:
+-One acceptor thread (run_acceptor): spun up by main() via pthread_create(). It owns the server
+socket and loops calling accept() to detect incoming client connections. -Up to MAX_CLIENTS client
+threads (run_client): each is spawned by the acceptor thread when a new connection arrives. Each
+client thread owns one connected socket and loops calling read() to receive messages, appending them
+to the shared list. main() joins the acceptor thread after setting aargs.run = false. the acceptor
+thread in turn joins all client threads before returning.
+*/
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,10 +52,10 @@
 #define MAX_CLIENTS 4
 #define NUM_MSG_PER_CLIENT 5
 
-#define handle_error(msg)                                                      \
-  do {                                                                         \
-    perror(msg);                                                               \
-    exit(EXIT_FAILURE);                                                        \
+#define handle_error(msg)                                                                          \
+  do {                                                                                             \
+    perror(msg);                                                                                   \
+    exit(EXIT_FAILURE);                                                                            \
   } while (0)
 
 struct list_node {
@@ -131,6 +168,9 @@ static void *run_client(void *args) {
 
       struct list_handle *list_handle = cargs->list_handle;
       // TODO: Safely use add_to_list to add new_node to the list
+      pthread_mutex_lock(cargs->list_lock);
+      add_to_list(list_handle, new_node);
+      pthread_mutex_unlock(cargs->list_lock);
     }
   }
 
@@ -168,6 +208,8 @@ static void *run_acceptor(void *args) {
         num_clients++;
 
         // TODO: Create a new thread to handle the client
+        pthread_create(&threads[num_clients], NULL, run_client, &client_args[num_clients]);
+        num_clients++;
       }
     }
   }
@@ -177,7 +219,9 @@ static void *run_acceptor(void *args) {
   // Shutdown and cleanup
   for (int i = 0; i < num_clients; i++) {
     // TODO: Set flag to stop the client thread
+    client_args[i].run = false;
     // TODO: Wait for the client thread and close its socket
+    pthread_join(threads[i], NULL);
   }
 
   if (close(sfd) == -1) {
@@ -208,6 +252,13 @@ int main() {
   pthread_create(&acceptor_thread, NULL, run_acceptor, &aargs);
 
   // TODO: Wait until enough messages are received
+  uint32_t target = MAX_CLIENTS * NUM_MSG_PER_CLIENT;
+  uint32_t current = 0;
+  while (current < target) {
+    pthread_mutex_lock(&list_mutex);
+    current = list_handle.count;
+    pthread_mutex_unlock(&list_mutex);
+  }
 
   aargs.run = false;
   pthread_join(acceptor_thread, NULL);
