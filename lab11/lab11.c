@@ -10,10 +10,10 @@
 #define GRN "\e[0;32m"
 #define CRESET "\e[0m"
 
-#define handle_error(msg)            \
-  do {                               \
-    perror(msg);                     \
-    exit(EXIT_FAILURE);              \
+#define handle_error(msg)                                                                          \
+  do {                                                                                             \
+    perror(msg);                                                                                   \
+    exit(EXIT_FAILURE);                                                                            \
   } while (0)
 
 size_t read_all_bytes(const char *filename, void *buffer, size_t buffer_size) {
@@ -57,13 +57,20 @@ int verify(const char *message_path, const char *sign_path, EVP_PKEY *pubkey);
 
 int main() {
   // File paths
-  const char *message_files[] = {"message1.txt", "message2.txt",
-                                 "message3.txt"};
-  const char *signature_files[] = {"signature1.sig", "signature2.sig",
-                                   "signature3.sig"};
+  const char *message_files[] = {"message1.txt", "message2.txt", "message3.txt"};
+  const char *signature_files[] = {"signature1.sig", "signature2.sig", "signature3.sig"};
 
   // TODO: Load the public key using PEM_read_PUBKEY
-  EVP_PKEY *pubkey = NULL;
+  FILE *key_file = fopen("public_key.pem", "rb");
+  if (!key_file)
+    handle_error("Error opening public key file");
+  EVP_PKEY *pubkey = PEM_read_PUBKEY(key_file, NULL, NULL, NULL);
+  fclose(key_file);
+  if (!pubkey) {
+    fprintf(stderr, "Error loading public key\n");
+    ERR_print_errors_fp(stderr);
+    exit(EXIT_FAILURE);
+  }
 
   // Verify each message
   for (int i = 0; i < 3; i++) {
@@ -102,6 +109,39 @@ int verify(const char *message_path, const char *sign_path, EVP_PKEY *pubkey) {
 
   // TODO: Check if the message is authentic using the signature.
   // Look at: https://wiki.openssl.org/index.php/EVP_Signing_and_Verifying
+  size_t msg_len = read_all_bytes(message_path, message, MAX_FILE_SIZE);
+  size_t sig_len = read_all_bytes(sign_path, signature, MAX_FILE_SIZE);
 
-  return -1;
+  EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+  if (!mdctx) {
+    fprintf(stderr, "Error creating digest context\n");
+    return -1;
+  }
+
+  if (EVP_DigestVerifyInit(mdctx, NULL, EVP_sha256(), NULL, pubkey) != 1) {
+    fprintf(stderr, "Error initializing digest verify\n");
+    ERR_print_errors_fp(stderr);
+    EVP_MD_CTX_free(mdctx);
+    return -1;
+  }
+
+  if (EVP_DigestVerifyUpdate(mdctx, message, msg_len) != 1) {
+    fprintf(stderr, "Error updating digest verify\n");
+    ERR_print_errors_fp(stderr);
+    EVP_MD_CTX_free(mdctx);
+    return -1;
+  }
+
+  int result = EVP_DigestVerifyFinal(mdctx, signature, sig_len);
+
+  EVP_MD_CTX_free(mdctx);
+
+  if (result == 1) {
+    return 1;
+  } else if (result == 0) {
+    return 0;
+  } else {
+    ERR_print_errors_fp(stderr);
+    return -1;
+  }
 }
